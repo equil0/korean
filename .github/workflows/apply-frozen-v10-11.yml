@@ -1,0 +1,46 @@
+name: Apply v10.11 FROZEN engine
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.frozen-v10-11/**'
+      - '.github/workflows/apply-frozen-v10-11.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Reconstruct and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .frozen-v10-11/part* | base64 -d > /tmp/frozen.patch.xz
+          echo 'f62e63b353bb7312a808b8af6f99cc3b1b485f78942b34a5cb42af28ffa9ae1f  /tmp/frozen.patch.xz' | sha256sum -c -
+          xz -dc /tmp/frozen.patch.xz > /tmp/frozen.patch
+      - name: Apply FROZEN engine patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v66-backend
+          patch -p1 --dry-run < /tmp/frozen.patch
+          patch -p1 < /tmp/frozen.patch
+          echo '4aad0708571a9e1e7742a414ac771a4bf8d89f564e0fffcd55bd8fd9e49b5a14  backend/index.ts' | sha256sum -c -
+      - name: Commit FROZEN engine and clean staging files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -r .frozen-v10-11
+          git rm .github/workflows/apply-frozen-v10-11.yml
+          git add v66-backend/backend/index.ts
+          git commit -m 'Switch question generation to v10.11 FROZEN engine'
+          git push origin HEAD:main
