@@ -1,0 +1,39 @@
+name: Expand v66 backend source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.v66-backend-upload/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  expand:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decode and expand backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .v66-backend-upload/part* | tr -d '\n\r' | base64 -d > /tmp/v66-backend.zip
+          rm -rf v66-backend
+          mkdir -p v66-backend
+          unzip -q /tmp/v66-backend.zip -d v66-backend
+          test -f v66-backend/backend/index.ts
+          test -f v66-backend/backend/supabaseSdk.ts
+          test -f v66-backend/deno.json
+          rm -rf .v66-backend-upload
+      - name: Commit expanded backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add v66 backend source for test deployment'
+          git push origin HEAD:main
