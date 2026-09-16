@@ -1,0 +1,34 @@
+name: Apply v66 speed patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.v66-speed.patch'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .v66-speed.patch
+          git apply .v66-speed.patch
+          rm -f .v66-speed.patch .github/workflows/apply-v66-speed.yml
+      - name: Commit optimized engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Optimize v66 question bank build pipeline'
+          git push origin HEAD:main
