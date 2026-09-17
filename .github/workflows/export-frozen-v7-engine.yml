@@ -1,0 +1,77 @@
+name: Export current FROZEN v7 engine
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-frozen-v7-engine.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build engine package
+        run: |
+          set -euo pipefail
+          TARGET_COMMIT=d078b559714b8cf68d05cda4e75f9116465e51ee
+          ROOT='국어_적응형_출제_엔진_v10.11_FROZEN_v7'
+          mkdir -p "$ROOT/backend" "$ROOT/supabase/functions/engine"
+          git show "$TARGET_COMMIT:v66-backend/backend/index.ts" > "$ROOT/backend/index.ts"
+          git show "$TARGET_COMMIT:v66-backend/backend/supabaseSdk.ts" > "$ROOT/backend/supabaseSdk.ts"
+          git show "$TARGET_COMMIT:v66-backend/deno.json" > "$ROOT/deno.json"
+          cat > "$ROOT/supabase/functions/engine/index.ts" <<'EOF'
+          import handler from 'https://raw.githubusercontent.com/equil0/korean/d078b559714b8cf68d05cda4e75f9116465e51ee/v66-backend/backend/index.ts';
+          declare const Deno: { serve(handler: (request: Request) => Promise<Response> | Response): void; };
+          Deno.serve((request: Request) => handler.fetch(request));
+          EOF
+          cat > "$ROOT/supabase/functions/engine/deno.json" <<'EOF'
+          {
+            "imports": {
+              "@supabase/supabase-js": "npm:@supabase/supabase-js@2.57.4"
+            }
+          }
+          EOF
+          cat > "$ROOT/README_한국어.md" <<'EOF'
+          # 국어 적응형 출제 엔진 — v10.11 FROZEN v7
+
+          이 패키지는 테스트 Supabase에 배포된 engine v15와 동일한 백엔드 소스 커밋을 기준으로 만든 엔진 소스 묶음입니다.
+
+          - 출제 규격: v10.11 FROZEN
+          - 엔진 계열: v7 자동 품질 검사·타깃 보정
+          - 배포 소스 커밋: d078b559714b8cf68d05cda4e75f9116465e51ee
+          - 자동 구축: 세트 생성 후 기계 품질 검사, 필요한 문항만 표적 보정하도록 설계
+          - 적응형 메타데이터: content / logic / inference / comparison / application, L1/L2/L3
+          - L3 품질 기준: 다중 근거·다단계 추론을 요구하도록 강화
+
+          ## 포함 파일
+          - backend/index.ts: 출제·학습·관리 API 핵심 엔진
+          - backend/supabaseSdk.ts: Supabase 저장·인증 어댑터
+          - supabase/functions/engine/index.ts: Edge Function 진입점
+          - supabase/functions/engine/deno.json: Edge Function import map
+          - deno.json: 백엔드 Deno 설정
+
+          ## 비밀값
+          OPENAI_API_KEY, TEACHER_PIN, AI_WORKER_SECRET 등 운영 비밀값은 이 패키지에 포함하지 않습니다.
+          EOF
+          cat > "$ROOT/VERSION.txt" <<'EOF'
+          product=Korean Adaptive Reading Question Engine
+          spec=v10.11 FROZEN
+          engine=v7-auto-quality
+          deployed_edge_function_version=15
+          source_commit=d078b559714b8cf68d05cda4e75f9116465e51ee
+          exported_at=2026-09-17
+          EOF
+          (cd "$ROOT" && sha256sum backend/index.ts backend/supabaseSdk.ts deno.json supabase/functions/engine/index.ts supabase/functions/engine/deno.json > SHA256SUMS.txt)
+          zip -qr '국어_적응형_출제_엔진_v10.11_FROZEN_v7_20260917.zip' "$ROOT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-v7-engine-export
+          path: '국어_적응형_출제_엔진_v10.11_FROZEN_v7_20260917.zip'
+          if-no-files-found: error
+          retention-days: 7
