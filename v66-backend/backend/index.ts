@@ -4396,7 +4396,7 @@ async function frozenSetBuildStep(
       return json({ ...result, bankComplete: result.complete, pipelineComplete: true });
     }
     const resumed = await findResumableBuildJob(uid, passageId, currentBankRevision(p));
-    if (resumed)
+    if (resumed && resumed.engineVersion === QUESTION_ENGINE_VERSION)
       return json({
         phase: resumed.pendingGenerationResponseId ? 'generating' :
           resumed.pendingAuditResponseId ? 'auditing' :
@@ -4406,6 +4406,8 @@ async function frozenSetBuildStep(
         generatedCount: resumed.generatedCount,
         targetCount: resumed.targets?.length || FROZEN_SET_QUESTION_COUNT,
       });
+    if (resumed && resumed.engineVersion !== QUESTION_ENGINE_VERSION)
+      await clearBuildJobs(uid, passageId);
 
     if (p.status === 'published') p = await invalidatePassageBank(passageId, p);
     await frozenSetAssets(p, existing, sourceChunk);
