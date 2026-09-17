@@ -4602,7 +4602,7 @@ function bankQualityIssues(qs: Array<Q & { id: string }>) {
 
     // v10.11 FROZEN set-wide surface-cue gates. These are automatic candidates only;
     // semantic QA remains authoritative.
-    const negativeStem = (stem: string) => /적절하지|옳지|않은|아닌|추론할 수 없는|뒷받침되지 않는|알 수 없는/.test(stem.split(/\n\s*<보기>|\n\s*〈보기〉/)[0]);
+    const negativeStem = (stem: string) => /적절하지|옳지|타당하지|부합하지|일치하지|맞지|않은|않는|아닌|틀린|잘못된|추론할 수 없는|뒷받침되지 않는|알 수 없는/.test(stem.split(/\n\s*<보기>|\n\s*〈보기〉/)[0]);
     const negativeCount = usable.filter(q => negativeStem(q.stem)).length;
     const negativeRatio = negativeCount / usable.length;
     if (negativeRatio < 0.2 || negativeRatio > 0.4)
