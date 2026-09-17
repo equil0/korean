@@ -17,12 +17,12 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: Patch FROZEN bank planning
-        run: python3 .github/patch_frozen_v2.py
-      - name: Commit engine patch
+      - name: Fix FROZEN negative-stem planner
+        run: python3 .github/fix_frozen_negative_helper.py
+      - name: Commit engine hotfix
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add v66-backend/backend/index.ts
-          git commit -m 'Make v10.11 FROZEN bank generation deficit-aware'
+          git commit -m 'Fix v10.11 FROZEN negative-stem planner scope'
           git push origin HEAD:main
