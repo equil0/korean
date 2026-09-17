@@ -320,10 +320,10 @@ const objectives: Objective[] = [
   'integration',
   'challenge',
 ];
-const QUALITY_VERSION = 'v10.11-frozen-set-adaptive-v4';
+const QUALITY_VERSION = 'v10.11-frozen-set-adaptive-v5';
 const CALIBRATION_VERSION = 'style-v2';
-const BUILD_ENGINE_VERSION = 'v10.11-frozen-set-build-v4';
-const QUESTION_ENGINE_VERSION = 'v10.11-frozen-set-v4';
+const BUILD_ENGINE_VERSION = 'v10.11-frozen-set-build-v5';
+const QUESTION_ENGINE_VERSION = 'v10.11-frozen-set-v5';
 const BUILD_JOB_TTL_MS = 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTRACT_JOB_TTL_MS = 9 * 60 * 1000;
 const SOURCE_IMPORT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -4322,7 +4322,7 @@ async function saveFrozenSetQuestions(passageId: string, uid: string, bankRevisi
 async function startFrozenSetGeneration(assets: Awaited<ReturnType<typeof frozenSetAssets>>, targets: BuildTarget[]) {
   return openAiStartBackground({
     model: GPT_MODELS.generator,
-    schemaName: 'frozen_set_questions_v4',
+    schemaName: 'frozen_set_questions_v5',
     schema: frozenCompactQuestionSchema(targets.length),
     system: `${frozenGenerationPrompt(assets.focusedText)}\n\n${FROZEN_ADAPTER_RULES}`,
     prompt: `${frozenSetGenerationInstructions(targets)}\n\n[승인 지문]\n${assets.focusedText}`,
@@ -4383,31 +4383,46 @@ async function frozenSetBuildStep(
   uid: string,
   passageId: string,
   initialPassage: Passage,
-  body: { sourceChunk?: unknown; phase?: unknown; jobId?: unknown }
+  body: {
+    sourceChunk?: unknown;
+    phase?: unknown;
+    jobId?: unknown;
+  }
 ) {
   let p = initialPassage;
-  const sourceChunk = typeof body.sourceChunk === 'number' && Number.isInteger(body.sourceChunk)
-    ? body.sourceChunk : 0;
+  const sourceChunk =
+    typeof body.sourceChunk === 'number' && Number.isInteger(body.sourceChunk)
+      ? body.sourceChunk
+      : 0;
 
   if (typeof body.jobId !== 'string' || !body.jobId) {
     const existing = await listQuestions(passageId);
     if (complete(existing)) {
       const result = await makeBuildResult(passageId, 0, 0, 0, 0);
-      return json({ ...result, bankComplete: result.complete, pipelineComplete: true });
+      return json({
+        ...result,
+        complete: true,
+        bankComplete: true,
+        pipelineComplete: true,
+        apiCallsMaximum: 0,
+      });
     }
-    const resumed = await findResumableBuildJob(uid, passageId, currentBankRevision(p));
+
+    const resumed = await findResumableBuildJob(
+      uid,
+      passageId,
+      currentBankRevision(p)
+    );
     if (resumed && resumed.engineVersion === QUESTION_ENGINE_VERSION)
       return json({
-        phase: resumed.pendingGenerationResponseId ? 'generating' :
-          resumed.pendingAuditResponseId ? 'auditing' :
-          resumed.candidates.length ? 'generated' : 'generation-ready',
+        phase: resumed.pendingGenerationResponseId ? 'generating' : 'generation-ready',
         jobId: resumed.id,
         resumed: true,
         generatedCount: resumed.generatedCount,
         targetCount: resumed.targets?.length || FROZEN_SET_QUESTION_COUNT,
+        apiPlan: 'one-call-frozen-set',
       });
-    if (resumed && resumed.engineVersion !== QUESTION_ENGINE_VERSION)
-      await clearBuildJobs(uid, passageId);
+    if (resumed) await clearBuildJobs(uid, passageId);
 
     if (p.status === 'published') p = await invalidatePassageBank(passageId, p);
     await frozenSetAssets(p, existing, sourceChunk);
@@ -4435,7 +4450,7 @@ async function frozenSetBuildStep(
       phase: 'generation-ready',
       jobId,
       targetCount: targets.length,
-      apiPlan: '1x-set-generation -> 1x-set-QA -> optional-1x-repair',
+      apiPlan: 'one-call-frozen-set',
     });
   }
 
@@ -4448,170 +4463,100 @@ async function frozenSetBuildStep(
 
   const existing = await listQuestions(passageId);
   const assets = await frozenSetAssets(p, existing, job.sourceChunk || sourceChunk);
+  const targets = job.targets || frozenSetTargets();
 
-  if (job.repairRound === 1) {
-    const targets = job.targets || [];
-    if (!targets.length || !job.candidates.length)
-      throw statusError('FROZEN 수정 대상 상태가 올바르지 않습니다.', 409);
-
-    if (job.pendingGenerationResponseId) {
-      const pending = await pollBuildStage<{ questions: unknown[] }>(
-        uid, passageId, jobId, job, 'generation', GPT_MODELS.generator
-      );
-      if (pending.state === 'waiting')
-        return json({ phase: 'generating', jobId, repairPending: true, targetCount: targets.length, apiStage: 'repairing' });
-      const raw = Array.isArray(pending.data.questions) ? pending.data.questions : [];
-      const repaired = targets
-        .map((target, index) => frozenRawToQuestion(raw[index], target))
-        .filter((q): q is Q => !!q);
-      delete job.pendingGenerationResponseId;
-      job.generatedCount += raw.length;
-      const valid = repaired.filter(q => frozenSetLocalIssues(q, assets.content.text).length === 0);
-      const accepted = valid.map(q => frozenAccepted(q));
-      await saveFrozenSetQuestions(
-        passageId, uid, job.bankRevision || currentBankRevision(p), accepted, job
-      );
-      job.candidates = [];
-      job.targets = [];
-      job.generationRejections = [];
-      job.repairRound = 2;
-      const result = await makeBuildResult(
-        passageId,
-        job.savedQuestionIds?.length || 0,
-        job.generatedCount,
-        job.auditIndex || 0,
-        job.auditIndex || 0
-      );
-      job.result = result;
-      await saveBuildJob(uid, passageId, jobId, job);
-      return json({
-        ...result,
-        complete: true,
-        bankComplete: result.complete,
-        pipelineComplete: true,
-        manualReviewRequired: !result.complete,
-        apiCallsMaximum: 3,
-        rejectionSummary: result.complete ? '' :
-          `FROZEN 생성·QA·수정 3회 상한까지 완료했지만 공개 조건이 남았습니다: ${bankQualityIssues(await listQuestions(passageId)).join(' · ')}`,
-      });
-    }
-
-    job.pendingGenerationResponseId = await startFrozenSetRepair(
-      assets, job.candidates, targets, job.generationRejections || []
-    );
-    await saveBuildJob(uid, passageId, jobId, job);
-    return json({ phase: 'generating', jobId, repairPending: true, targetCount: targets.length, apiStage: 'repair-failures-only' });
-  }
-
-  if (!job.candidates.length) {
-    const targets = job.targets || frozenSetTargets();
-    if (job.pendingGenerationResponseId) {
-      const pending = await pollBuildStage<{ questions: unknown[] }>(
-        uid, passageId, jobId, job, 'generation', GPT_MODELS.generator
-      );
-      if (pending.state === 'waiting')
-        return json({ phase: 'generating', jobId, targetCount: targets.length, generatedCount: job.generatedCount });
-      const raw = Array.isArray(pending.data.questions) ? pending.data.questions : [];
-      const candidates = targets
-        .map((target, index) => frozenRawToQuestion(raw[index], target))
-        .filter((q): q is Q => !!q);
-      delete job.pendingGenerationResponseId;
-      job.generatedCount += raw.length;
-      job.generationIndex = targets.length;
-      job.candidates = candidates;
-      await saveBuildJob(uid, passageId, jobId, job);
-      if (candidates.length !== targets.length)
-        throw statusError(`FROZEN 세트 생성 응답 ${targets.length}개 중 ${candidates.length}개만 구조화되었습니다. 추가 API 호출을 중단합니다.`, 502);
-      return json({ phase: 'generated', jobId, generatedCount: job.generatedCount, targetCount: candidates.length, apiStage: 'set-generated' });
-    }
+  if (!job.pendingGenerationResponseId) {
     job.pendingGenerationResponseId = await startFrozenSetGeneration(assets, targets);
     await saveBuildJob(uid, passageId, jobId, job);
-    return json({ phase: 'generating', jobId, targetCount: targets.length, apiStage: 'generate-set' });
-  }
-
-  if (!job.auditVerdicts) {
-    if (job.pendingAuditResponseId) {
-      const pending = await pollBuildStage<{ verdicts: FrozenSetQaRaw[] }>(
-        uid, passageId, jobId, job, 'audit', GPT_MODELS.audit
-      );
-      if (pending.state === 'waiting')
-        return json({ phase: 'auditing', jobId, targetCount: job.candidates.length, apiStage: 'qa-set' });
-      const rawVerdicts = Array.isArray(pending.data.verdicts) ? pending.data.verdicts : [];
-      job.auditVerdicts = rawVerdicts
-        .map(raw => {
-          const q = job.candidates[raw.index];
-          return q ? frozenQaToAudit(raw, q) : null;
-        })
-        .filter((item): item is AuditVerdict => !!item);
-      job.auditIndex = job.auditVerdicts.length;
-      delete job.pendingAuditResponseId;
-      await saveBuildJob(uid, passageId, jobId, job);
-    } else {
-      job.pendingAuditResponseId = await startFrozenSetQa(assets, job.candidates);
-      await saveBuildJob(uid, passageId, jobId, job);
-      return json({ phase: 'auditing', jobId, targetCount: job.candidates.length, apiStage: 'qa-set' });
-    }
-  }
-
-  const verdicts = job.auditVerdicts || [];
-  const passed: Q[] = [];
-  const failedQuestions: Q[] = [];
-  const failedTargets: BuildTarget[] = [];
-  const failedIssues: string[] = [];
-
-  job.candidates.forEach((q, index) => {
-    const verdict = verdicts.find(item => item.index === index);
-    const issues = frozenQaIssues(q, verdict, assets.content.text);
-    if (!issues.length && verdict) passed.push(frozenAccepted(q, verdict));
-    else {
-      failedQuestions.push(q);
-      failedTargets.push({ skill: q.skill, level: q.level, objective: q.objective });
-      failedIssues.push(issues.join(' / '));
-    }
-  });
-
-  await saveFrozenSetQuestions(
-    passageId, uid, job.bankRevision || currentBankRevision(p), passed, job
-  );
-
-  if (failedQuestions.length) {
-    job.candidates = failedQuestions;
-    job.targets = failedTargets;
-    job.generationRejections = failedIssues;
-    job.auditVerdicts = undefined;
-    job.repairRound = 1;
-    job.generationIndex = 0;
-    await saveBuildJob(uid, passageId, jobId, job);
     return json({
-      phase: 'generated',
+      phase: 'generating',
       jobId,
-      repairPending: true,
-      passedCount: passed.length,
-      repairCount: failedQuestions.length,
-      apiStage: 'repair-required',
+      targetCount: targets.length,
+      apiStage: 'frozen-generate-self-review',
+      apiCallsMaximum: 1,
     });
   }
 
+  const pending = await pollBuildStage<{ questions: unknown[] }>(
+    uid,
+    passageId,
+    jobId,
+    job,
+    'generation',
+    GPT_MODELS.generator
+  );
+  if (pending.state === 'waiting')
+    return json({
+      phase: 'generating',
+      jobId,
+      targetCount: targets.length,
+      generatedCount: job.generatedCount,
+      apiStage: 'frozen-generate-self-review',
+      apiCallsMaximum: 1,
+    });
+
+  const raw = Array.isArray(pending.data.questions)
+    ? pending.data.questions
+    : [];
+  const candidates = targets
+    .map((target, index) => frozenRawToQuestion(raw[index], target))
+    .filter((q): q is Q => !!q);
+  delete job.pendingGenerationResponseId;
+  job.generatedCount += raw.length;
+  job.generationIndex = targets.length;
+
+  // FROZEN already performs design, QA and revision internally.  The server only
+  // rejects malformed transport objects here; it does not run another subjective
+  // difficulty/skill audit over the same questions.
+  const accepted = candidates
+    .filter(q => {
+      if (!q.stem.trim()) return false;
+      if (q.choices.length !== 5) return false;
+      if (new Set(q.choices.map(choice => stemKey(choice))).size !== 5) return false;
+      if (!Number.isInteger(q.answer) || q.answer < 1 || q.answer > 5) return false;
+      if (!q.explanation.trim()) return false;
+      return true;
+    })
+    .map(q => frozenAccepted(q));
+
+  await saveFrozenSetQuestions(
+    passageId,
+    uid,
+    job.bankRevision || currentBankRevision(p),
+    accepted,
+    job
+  );
+
   job.candidates = [];
   job.targets = [];
+  job.auditVerdicts = undefined;
+  job.generationRejections = [];
+  job.repairRound = 0;
+
   const result = await makeBuildResult(
     passageId,
     job.savedQuestionIds?.length || 0,
     job.generatedCount,
-    verdicts.length,
-    verdicts.length
+    accepted.length,
+    0
   );
   job.result = result;
   await saveBuildJob(uid, passageId, jobId, job);
+
+  const structuralRejected = Math.max(0, candidates.length - accepted.length);
   return json({
     ...result,
+    // `complete` here stops the async worker after the single authorized model call.
+    // `bankComplete` is the actual publication readiness flag.
     complete: true,
     bankComplete: result.complete,
     pipelineComplete: true,
     manualReviewRequired: !result.complete,
-    apiCallsMaximum: 2,
-    rejectionSummary: result.complete ? '' :
-      `FROZEN 세트 생성·일괄 QA까지 완료했지만 공개 조건이 남았습니다: ${bankQualityIssues(await listQuestions(passageId)).join(' · ')}`,
+    apiCallsMaximum: 1,
+    structuralRejected,
+    rejectionSummary: result.complete
+      ? ''
+      : `FROZEN 1회 세트 생성은 끝났지만 공개 조건이 남았습니다: ${bankQualityIssues(await listQuestions(passageId)).join(' · ')}`,
   });
 }
 
@@ -7045,7 +6990,7 @@ export const handler = router({
 
           if (
             b.trial !== true &&
-            QUESTION_ENGINE_VERSION === 'v10.11-frozen-set-v4'
+            QUESTION_ENGINE_VERSION === 'v10.11-frozen-set-v5'
           )
             return await frozenSetBuildStep(uid, passageId, p, b);
 
