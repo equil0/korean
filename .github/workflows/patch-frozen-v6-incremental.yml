@@ -1,0 +1,31 @@
+name: Patch v10.11 FROZEN v6 incremental L3 rebuild
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-frozen-v6-incremental.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply incremental v6 target selection
+        run: python3 .github/patch_frozen_v6_incremental.py
+      - name: TypeScript syntax check
+        run: |
+          npx --yes esbuild v66-backend/backend/index.ts --platform=neutral --format=esm --log-level=warning --outfile=/tmp/index.js
+      - name: Commit engine patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add v66-backend/backend/index.ts
+          git commit -m 'Generate only missing FROZEN v6 targets'
+          git push origin HEAD:main
