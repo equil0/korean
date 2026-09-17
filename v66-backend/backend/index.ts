@@ -320,10 +320,10 @@ const objectives: Objective[] = [
   'integration',
   'challenge',
 ];
-const QUALITY_VERSION = 'v10.11-frozen-set-adaptive-v3';
+const QUALITY_VERSION = 'v10.11-frozen-set-adaptive-v4';
 const CALIBRATION_VERSION = 'style-v2';
-const BUILD_ENGINE_VERSION = 'v10.11-frozen-set-build-v3';
-const QUESTION_ENGINE_VERSION = 'v10.11-frozen-set-v3';
+const BUILD_ENGINE_VERSION = 'v10.11-frozen-set-build-v4';
+const QUESTION_ENGINE_VERSION = 'v10.11-frozen-set-v4';
 const BUILD_JOB_TTL_MS = 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTRACT_JOB_TTL_MS = 9 * 60 * 1000;
 const SOURCE_IMPORT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -4002,6 +4002,16 @@ function frozenBankGenerationPlan(
 
 
 const FROZEN_SET_QUESTION_COUNT = 25;
+type FrozenSetQaRaw = {
+  index: number;
+  answer: number;
+  pass: boolean;
+  stemClear: boolean;
+  uniqueAnswer: boolean;
+  evidenceValid: boolean;
+  explanationValid: boolean;
+  issues: string[];
+};
 
 function frozenSetTargets(): BuildTarget[] {
   const groups: Array<{ level: Level; objective: Objective }> = [
@@ -4012,11 +4022,7 @@ function frozenSetTargets(): BuildTarget[] {
     { level: 'L3', objective: 'challenge' },
   ];
   return groups.flatMap(group =>
-    skills.map(skill => ({
-      skill,
-      level: group.level,
-      objective: group.objective,
-    }))
+    skills.map(skill => ({ skill, level: group.level, objective: group.objective }))
   );
 }
 
@@ -4031,188 +4037,161 @@ function frozenSetTargetPlan(targets: BuildTarget[]) {
 
 function frozenSetGenerationInstructions(targets: BuildTarget[]) {
   return `v10.11 FROZEN 규칙으로 아래 ${targets.length}문항을 하나의 문제은행 세트로 완결하라.
-이 작업은 학생별 실시간 생성이 아니라 교사용 사전 문제은행 구축이다. 각 문항을 따로 생성하지 말고 전체 세트를 한 번에 설계해 출력한다.
+이 작업은 학생별 실시간 생성이 아니라 교사용 사전 문제은행 구축이다. 전체 세트를 한 번에 설계하고 자체 검수한 뒤 최종 문항만 출력한다.
 
 [적응형 문제은행 메타데이터 계획]
 ${frozenSetTargetPlan(targets)}
 
 [세트 전역 규칙]
 - 전체 ${targets.length}문항은 5문항짜리 내부 세트 5개로 본다. 각 내부 세트에는 content, logic, inference, comparison, application이 각각 1문항씩 있다.
-- 각 내부 세트마다 부정형 발문은 정확히 1문항만 사용한다. 단순히 '적절한'을 '적절하지 않은'으로 뒤집지 말고 실제 판단 과업이 부정형이어야 한다.
+- 각 내부 세트마다 부정형 발문은 정확히 1문항만 사용한다. 단순히 긍정형 문장의 어미만 뒤집지 말고 실제 판단 과업이 부정형이어야 한다.
 - 정답 번호는 전체 25문항에서 1~5가 각각 대체로 5회가 되게 하고, 가능하면 각 내부 세트에서도 1~5를 한 번씩 사용한다. 정답 위치를 맞추려고 의미를 훼손하지 않는다.
 - 정답 선지가 유일한 최장 선지가 되는 문항은 전체 5개 이하로 제한한다. 길이 맞추기용 패딩은 금지한다.
-- 모든 문항의 발문은 한 번 읽고 질문 대상을 즉시 알 수 있는 간결한 한 문장을 원칙으로 한다. <보기>를 제외한 질문 문장은 원칙적으로 85자 이내로 한다.
-- 난도는 긴 발문·추상명사·중첩 관형절이 아니라 원문 근거 결합, 조건 비교, near-miss 오답 판별에서 만든다.
-- L1은 핵심 정보/조건 확인, L2는 서로 다른 근거 2개 이상의 연결, L3는 필수 판단 3단계 이상의 실제 독해 부담을 갖게 한다.
-- 각 skill/level/objective는 학생 화면 문구가 아니라 적응형 선택용 메타데이터다. 해당 목표를 실제 풀이 경로로 충족해야 한다.
-- 동일 소재·동일 판단을 단어만 바꿔 반복하지 않는다.
-- 원문에 없는 교사용 지식이나 외부 사실을 넣지 않는다.
+- 발문은 한 번 읽고 질문 대상을 즉시 알 수 있는 간결한 한 문장을 원칙으로 한다. 난도는 긴 발문이나 중첩 관형절이 아니라 근거 결합과 선지 판별에서 만든다.
+- L1은 핵심 정보·조건 확인, L2는 서로 다른 근거의 연결, L3는 여러 조건과 근거를 결합한 판단을 요구한다.
+- skill/level/objective는 적응형 선택을 위한 설계 목표다. 각 문항은 지정된 목표에 맞게 설계한다.
+- 동일 소재·동일 판단을 표현만 바꿔 반복하지 않는다.
+- 원문에 없는 지식이나 사실을 끌어오지 않는다.
+- 설계와 자기검수는 내부적으로 수행하고 JSON에는 최종 문항 필드만 출력한다.
 - questions 배열 순서는 위 1~25 목표 순서와 반드시 일치한다.`;
 }
 
-async function frozenSetAssets(
-  p: Passage,
-  existing: Array<Q & { id: string }>,
-  sourceChunk = 0
-) {
-  const sourceValidation = await validatePassageSource(p);
-  if (sourceValidation.issues.length)
-    throw statusError(
-      '원문 품질 문제 때문에 출제를 중단했습니다: ' +
-        sourceValidation.issues.join(', '),
-      422
-    );
-  const content = sourceValidation.content;
-  const imageMode = p.sourceMode === 'image';
-  const rawPageTexts = imageMode ? await loadSourcePageTexts(p) : [];
-  const alignedPageTexts = imageMode
-    ? alignSourcePageTexts(p, rawPageTexts)
-    : [];
-  const sourcePages = imageMode
-    ? relevantSourcePages(p, alignedPageTexts, content.text)
-    : [];
-  if (imageMode && !sourcePages.length)
-    throw statusError(
-      'PDF 페이지와 학생용 확정 지문 경계를 일치시킬 수 없어 구축을 시작하지 않았습니다.',
-      422
-    );
-  const focusPages =
-    imageMode && sourcePages.length
-      ? selectBuildFocusPages(sourcePages, existing, sourceChunk)
-      : [];
-  const focusedText = focusedSourceText(p, content.text, focusPages);
-  if (focusedText.replace(/\s/g, '').length < 100)
-    throw statusError(
-      '문항 생성에 사용할 목표 지문 텍스트가 부족합니다.',
-      422
-    );
+function frozenCompactQuestionSchema(count: number) {
   return {
-    content,
-    imageMode,
-    sourcePages,
-    focusPages,
-    focusedText,
-    context: sourceContext(p, focusedText, focusPages),
-  };
-}
-
-function frozenQaIssues(
-  q: Q,
-  verdict: AuditVerdict | undefined,
-  sourceText: string,
-  focusedText: string,
-  comparisonStems: string[],
-  imageMode: boolean,
-  sourcePages: SourcePageText[]
-) {
-  const issues = [
-    ...questionDesignIssues(q, focusedText),
-    ...staticQuestionIssues(
-      q,
-      sourceText,
-      comparisonStems,
-      imageMode,
-      sourcePages
-    ),
-  ];
-  if (!verdict) issues.push('FROZEN 일괄 QA 결과 누락');
-  else {
-    if (!auditPasses(verdict, q, focusedText))
-      issues.push(...(verdict.issues?.length ? verdict.issues : ['FROZEN 일괄 QA 미통과']));
-    if (
-      verdict.difficulty?.observedSkill !== q.skill ||
-      verdict.difficulty?.observedLevel !== q.level
-    )
-      issues.push(
-        `실제 분류 불일치: 목표 ${q.skill}·${q.level}, QA ${verdict.difficulty?.observedSkill || '미분류'}·${verdict.difficulty?.observedLevel || '미분류'}`
-      );
-  }
-  return [...new Set(issues)].slice(0, 8);
-}
-
-function frozenAcceptedFromAudit(q: Q, verdict: AuditVerdict): Q {
-  const auditedTrap =
-    verdict.choiceChecks.find(
-      check => check.choice !== q.answer && check.plausible
-    )?.trap || '';
-  const misconception =
-    q.misconception.trim().slice(0, 300) ||
-    auditedTrap.trim().slice(0, 300) ||
-    '원문의 결정적 조건을 빠뜨린 오독';
-  const strongest =
-    verdict.choiceChecks.find(
-      check => check.choice !== q.answer && check.plausible
-    )?.choice || (q.answer === 1 ? 2 : 1);
-  const d = verdict.difficulty;
-  return {
-    ...q,
-    misconception,
-    qualityVersion: QUALITY_VERSION,
-    verification: {
-      engineVersion: QUESTION_ENGINE_VERSION,
-      reviewMode: 'ai-multimodel',
-      solverConfidence: 1,
-      secondConfidence: 1,
-      finalConfidence: 1,
-      finalPass: true,
-      auditPass: true,
-      models: {
-        generator: GPT_MODELS.generator,
-        solverA: 'not-used:frozen-set-v3',
-        solverB: 'not-used:frozen-set-v3',
-        solverC: 'not-used:frozen-set-v3',
-        audit: GPT_MODELS.audit,
+    type: 'object',
+    properties: {
+      questions: {
+        type: 'array',
+        minItems: count,
+        maxItems: count,
+        items: {
+          type: 'object',
+          properties: {
+            stem: { type: 'string', minLength: 8, maxLength: 650 },
+            choices: {
+              type: 'array',
+              minItems: 5,
+              maxItems: 5,
+              items: { type: 'string', minLength: 1, maxLength: 180 },
+            },
+            answer: { type: 'integer', enum: [1, 2, 3, 4, 5] },
+            explanation: { type: 'string', minLength: 8, maxLength: 900 },
+            misconception: { type: 'string', minLength: 3, maxLength: 300 },
+            evidence: { type: 'string', minLength: 3, maxLength: 500 },
+          },
+          required: ['stem', 'choices', 'answer', 'explanation', 'misconception', 'evidence'],
+          additionalProperties: false,
+        },
       },
-      difficulty: d,
-      blindDemand: {
-        observedSkill: q.skill,
-        observedLevel: q.level,
-        shortcut: 'none',
-        shortcutReason: 'v10.11 FROZEN 세트 일괄 QA를 통과함',
-        minimalSteps: d.reasoningSteps,
-        evidenceTests: d.evidenceQuotes.map(quote => ({
-          quote,
-          competingChoices: [strongest],
-          reason: d.decisiveCondition,
-        })),
-        strongestDistractor: strongest,
-        sharedGround: '정답과 경쟁 오답이 원문의 일부 근거를 공유함',
-        decisiveDifference: d.decisiveCondition,
-      },
-      distractorReviews: verdict.choiceChecks
-        .filter(check => check.choice !== q.answer)
-        .map(check => ({
-          choice: check.choice,
-          trap: check.trap || check.reason,
-        })),
     },
+    required: ['questions'],
+    additionalProperties: false,
   };
 }
 
-function frozenAcceptedFromRepair(q: Q): Q {
-  const design = q.design;
-  const steps =
-    design?.reasoningSteps?.filter(Boolean).slice(0, 5) ||
-    [q.explanation.slice(0, 180)];
-  const evidenceQuotes =
-    design?.evidenceQuotes?.filter(Boolean).slice(0, 4) ||
-    [q.evidence];
-  const decisive =
-    design?.decisiveCondition?.trim() ||
-    '정답과 가장 매력적인 오답을 가르는 원문의 조건과 적용 범위를 구별한다.';
-  const strongest =
-    design?.distractors?.find(item => item.choice !== q.answer)?.choice ||
-    (q.answer === 1 ? 2 : 1);
-  const difficulty: DifficultyReview = {
+function frozenSetQaSchema(count: number) {
+  return {
+    type: 'object',
+    properties: {
+      verdicts: {
+        type: 'array',
+        minItems: count,
+        maxItems: count,
+        items: {
+          type: 'object',
+          properties: {
+            index: { type: 'integer', minimum: 0, maximum: Math.max(0, count - 1) },
+            answer: { type: 'integer', enum: [1, 2, 3, 4, 5] },
+            pass: { type: 'boolean' },
+            stemClear: { type: 'boolean' },
+            uniqueAnswer: { type: 'boolean' },
+            evidenceValid: { type: 'boolean' },
+            explanationValid: { type: 'boolean' },
+            issues: {
+              type: 'array',
+              maxItems: 5,
+              items: { type: 'string', maxLength: 240 },
+            },
+          },
+          required: ['index', 'answer', 'pass', 'stemClear', 'uniqueAnswer', 'evidenceValid', 'explanationValid', 'issues'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['verdicts'],
+    additionalProperties: false,
+  };
+}
+
+function frozenRawToQuestion(raw: unknown, target: BuildTarget): Q | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const choices = Array.isArray(value.choices)
+    ? value.choices.map(item => (typeof item === 'string' ? item.trim() : ''))
+    : [];
+  const answer = Number(value.answer);
+  if (
+    typeof value.stem !== 'string' ||
+    choices.length !== 5 ||
+    choices.some(choice => !choice) ||
+    !Number.isInteger(answer) ||
+    answer < 1 ||
+    answer > 5 ||
+    typeof value.explanation !== 'string' ||
+    typeof value.misconception !== 'string' ||
+    typeof value.evidence !== 'string'
+  ) return null;
+  return {
+    stem: value.stem.trim(),
+    choices,
+    answer,
+    explanation: value.explanation.trim(),
+    misconception: value.misconception.trim(),
+    evidence: value.evidence.trim(),
+    skill: target.skill,
+    level: target.level,
+    objective: target.objective || 'integration',
+  };
+}
+
+function frozenSetLocalIssues(q: Q, sourceText: string) {
+  const issues: string[] = [];
+  if (!q.stem.trim() || q.stem.length > 650) issues.push('발문 길이/형식 오류');
+  if (q.choices.length !== 5) issues.push('선택지 수 오류');
+  const choiceKeys = q.choices.map(choice => stemKey(choice));
+  if (new Set(choiceKeys).size !== 5) issues.push('중복 선택지');
+  if (!Number.isInteger(q.answer) || q.answer < 1 || q.answer > 5) issues.push('정답 번호 오류');
+  if (!q.explanation.trim()) issues.push('해설 누락');
+  if (!q.evidence.trim()) issues.push('근거 누락');
+  const source = normalizeOldHangul(sourceText);
+  const evidence = normalizeOldHangul(q.evidence).trim();
+  if (evidence && !source.includes(evidence)) issues.push('근거가 원문 연속 구절과 일치하지 않음');
+  if (/(이라는 기준으로|하도록 하는 방식이라는 기준으로|관계를 파악하도록 하는 방식)/.test(q.stem))
+    issues.push('발문 문장 구조가 지나치게 복잡함');
+  return issues;
+}
+
+function frozenDifficultyFor(q: Q): DifficultyReview {
+  const steps = q.explanation
+    .split(/(?<=[.!?。])\s+|\n+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  return {
     observedSkill: q.skill,
     observedLevel: q.level,
     singleFactRetrieval: q.level === 'L1',
     answerCued: false,
-    reasoningSteps: steps,
-    evidenceQuotes,
-    decisiveCondition: decisive,
-    levelRationale: 'v10.11 FROZEN 검수·수정 프롬프트로 탈락 사유를 반영해 일괄 수정함',
+    reasoningSteps: steps.length ? steps : [q.explanation.slice(0, 180)],
+    evidenceQuotes: [q.evidence],
+    decisiveCondition: q.misconception || '원문의 결정적 조건과 적용 범위를 구별한다.',
+    levelRationale: 'v10.11 FROZEN 세트 설계 목표와 일괄 QA를 기준으로 저장한 적응형 메타데이터',
   };
+}
+
+function frozenAccepted(q: Q, verdict?: AuditVerdict): Q {
+  const difficulty = frozenDifficultyFor(q);
+  const strongest = q.answer === 1 ? 2 : 1;
   return {
     ...q,
     qualityVersion: QUALITY_VERSION,
@@ -4226,9 +4205,9 @@ function frozenAcceptedFromRepair(q: Q): Q {
       auditPass: true,
       models: {
         generator: GPT_MODELS.generator,
-        solverA: 'not-used:frozen-set-v3',
-        solverB: 'not-used:frozen-set-v3',
-        solverC: 'not-used:frozen-set-v3',
+        solverA: 'not-used:frozen-set-v4',
+        solverB: 'not-used:frozen-set-v4',
+        solverC: 'not-used:frozen-set-v4',
         audit: GPT_MODELS.audit,
       },
       difficulty,
@@ -4236,108 +4215,167 @@ function frozenAcceptedFromRepair(q: Q): Q {
         observedSkill: q.skill,
         observedLevel: q.level,
         shortcut: 'none',
-        shortcutReason: 'v10.11 FROZEN QA 수정 단계에서 결함을 제거함',
-        minimalSteps: steps,
-        evidenceTests: evidenceQuotes.map(quote => ({
-          quote,
+        shortcutReason: 'v10.11 FROZEN 세트 생성과 일괄 QA를 통과함',
+        minimalSteps: difficulty.reasoningSteps,
+        evidenceTests: [{
+          quote: q.evidence,
           competingChoices: [strongest],
-          reason: decisive,
-        })),
+          reason: difficulty.decisiveCondition,
+        }],
         strongestDistractor: strongest,
-        sharedGround: '정답과 경쟁 오답이 원문의 일부 근거를 공유함',
-        decisiveDifference: decisive,
+        sharedGround: '정답과 경쟁 오답이 지문 근거를 공유함',
+        decisiveDifference: difficulty.decisiveCondition,
       },
-      distractorReviews:
-        design?.distractors?.map(item => ({
-          choice: item.choice,
-          trap: item.misreading,
-        })) || [],
+      distractorReviews: q.choices
+        .map((_, index) => index + 1)
+        .filter(choice => choice !== q.answer)
+        .map(choice => ({ choice, trap: q.misconception })),
     },
   };
 }
 
-async function saveFrozenSetQuestions(
-  passageId: string,
-  uid: string,
-  bankRevision: number,
-  questions: Q[],
-  job: BuildJob
-) {
+function frozenQaToAudit(raw: FrozenSetQaRaw, q: Q): AuditVerdict {
+  const difficulty = frozenDifficultyFor(q);
+  return {
+    index: raw.index,
+    answer: raw.answer,
+    pass: raw.pass,
+    stemClear: raw.stemClear,
+    uniqueAnswer: raw.uniqueAnswer,
+    evidenceValid: raw.evidenceValid,
+    explanationValid: raw.explanationValid,
+    skillValid: true,
+    levelValid: true,
+    difficulty,
+    choiceChecks: q.choices.map((_, index) => ({
+      choice: index + 1,
+      judgement: index + 1 === q.answer ? 'correct' : 'incorrect',
+      reason: index + 1 === q.answer ? q.explanation : q.misconception,
+      plausible: index + 1 !== q.answer,
+      trap: index + 1 === q.answer ? '' : q.misconception,
+    })),
+    issues: raw.issues || [],
+  };
+}
+
+function frozenQaIssues(q: Q, verdict: AuditVerdict | undefined, sourceText: string) {
+  const issues = frozenSetLocalIssues(q, sourceText);
+  if (!verdict) issues.push('FROZEN 일괄 QA 결과 누락');
+  else {
+    if (verdict.answer !== q.answer) issues.push(`정답 불일치: 출제 ${q.answer}, QA ${verdict.answer}`);
+    if (!verdict.pass) issues.push(...(verdict.issues?.length ? verdict.issues : ['FROZEN QA 미통과']));
+    if (!verdict.stemClear) issues.push('발문 명료성 미통과');
+    if (!verdict.uniqueAnswer) issues.push('정답 유일성 미통과');
+    if (!verdict.evidenceValid) issues.push('원문 근거 검증 미통과');
+    if (!verdict.explanationValid) issues.push('해설 검증 미통과');
+  }
+  return [...new Set(issues)].slice(0, 8);
+}
+
+async function frozenSetAssets(p: Passage, existing: Array<Q & { id: string }>, sourceChunk = 0) {
+  const sourceValidation = await validatePassageSource(p);
+  if (sourceValidation.issues.length)
+    throw statusError('원문 품질 문제 때문에 출제를 중단했습니다: ' + sourceValidation.issues.join(', '), 422);
+  const content = sourceValidation.content;
+  const imageMode = p.sourceMode === 'image';
+  const rawPageTexts = imageMode ? await loadSourcePageTexts(p) : [];
+  const alignedPageTexts = imageMode ? alignSourcePageTexts(p, rawPageTexts) : [];
+  const sourcePages = imageMode ? relevantSourcePages(p, alignedPageTexts, content.text) : [];
+  if (imageMode && !sourcePages.length)
+    throw statusError('PDF 페이지와 학생용 확정 지문 경계를 일치시킬 수 없어 구축을 시작하지 않았습니다.', 422);
+  const focusPages = imageMode && sourcePages.length
+    ? selectBuildFocusPages(sourcePages, existing, sourceChunk)
+    : [];
+  const focusedText = focusedSourceText(p, content.text, focusPages);
+  if (focusedText.replace(/\s/g, '').length < 100)
+    throw statusError('문항 생성에 사용할 목표 지문 텍스트가 부족합니다.', 422);
+  return { content, imageMode, sourcePages, focusPages, focusedText };
+}
+
+async function saveFrozenSetQuestions(passageId: string, uid: string, bankRevision: number, questions: Q[], job: BuildJob) {
   if (!questions.length) return 0;
   const existing = await listQuestions(passageId);
-  const fresh = questions.filter(
-    (q, index) =>
-      !existing.some(old => sameGeneratedQuestion(old, q)) &&
-      questions.findIndex(other => sameGeneratedQuestion(other, q)) === index
+  const fresh = questions.filter((q, index) =>
+    !existing.some(old => sameGeneratedQuestion(old, q)) &&
+    questions.findIndex(other => sameGeneratedQuestion(other, q)) === index
   );
   if (!fresh.length) return 0;
   const currentPassage = await getPassage(passageId);
-  if (
-    !currentPassage ||
-    currentPassage.ownerUid !== uid ||
-    currentPassage.deleting ||
-    currentBankRevision(currentPassage) !== bankRevision ||
-    currentPassage.status === 'published'
-  )
-    throw statusError(
-      '검수 중 문제은행 revision이 변경되어 문항을 저장하지 않았습니다.',
-      409
-    );
+  if (!currentPassage || currentPassage.ownerUid !== uid || currentPassage.deleting ||
+      currentBankRevision(currentPassage) !== bankRevision || currentPassage.status === 'published')
+    throw statusError('검수 중 문제은행 revision이 변경되어 문항을 저장하지 않았습니다.', 409);
   const ids = await db.add(qTable(passageId), fresh);
   if (ids.some(id => id === null)) {
     const partialIds = ids.filter((id): id is string => id !== null);
     if (partialIds.length) await deleteDbRows(qTable(passageId), partialIds);
-    throw statusError(
-      '검증 문항 일부를 저장하지 못해 이번 저장분을 되돌렸습니다.',
-      500
-    );
+    throw statusError('검증 문항 일부를 저장하지 못해 이번 저장분을 되돌렸습니다.', 500);
   }
   const canonicalIds = await canonicalizeSavedQuestionDuplicates(
     passageId,
     ids.filter((id): id is string => id !== null),
     new Set(existing.map(question => question.id))
   );
-  job.savedQuestionIds = [
-    ...(job.savedQuestionIds || []),
-    ...canonicalIds,
-  ];
+  job.savedQuestionIds = [...(job.savedQuestionIds || []), ...canonicalIds];
   return canonicalIds.length;
 }
 
-async function startFrozenSetRepairBackground(
-  assets: Awaited<ReturnType<typeof frozenSetAssets>>,
-  candidates: Q[],
-  targets: BuildTarget[],
-  issues: string[]
-) {
+async function startFrozenSetGeneration(assets: Awaited<ReturnType<typeof frozenSetAssets>>, targets: BuildTarget[]) {
+  return openAiStartBackground({
+    model: GPT_MODELS.generator,
+    schemaName: 'frozen_set_questions_v4',
+    schema: frozenCompactQuestionSchema(targets.length),
+    system: `${frozenGenerationPrompt(assets.focusedText)}\n\n${FROZEN_ADAPTER_RULES}`,
+    prompt: `${frozenSetGenerationInstructions(targets)}\n\n[승인 지문]\n${assets.focusedText}`,
+    images: [],
+    maxOutputTokens: 26000,
+    reasoning: 'medium',
+  });
+}
+
+async function startFrozenSetQa(assets: Awaited<ReturnType<typeof frozenSetAssets>>, candidates: Q[]) {
+  const auditInput = candidates.map((q, index) => ({
+    index,
+    stem: q.stem,
+    choices: q.choices,
+    answer: q.answer,
+    explanation: q.explanation,
+    evidence: q.evidence,
+  }));
+  return openAiStartBackground({
+    model: GPT_MODELS.audit,
+    schemaName: 'frozen_set_qa_v4',
+    schema: frozenSetQaSchema(candidates.length),
+    system: AUDIT_SYSTEM,
+    prompt: `[승인 지문]\n${assets.focusedText}\n\n[검수 지시]\nv10.11 FROZEN 기준으로 아래 세트 전체를 한 번에 검수한다. 서버의 skill/level 목표와 일치하는지는 합격 조건으로 삼지 않는다. 오직 원문 정합성, 정답 유일성, 발문 명료성, 근거 충분성, 해설 타당성, 세트 내 중복·단서 편향을 검사한다. 실제 수정이 필요한 결함만 issues에 적는다.\n\n[문항 세트]\n${JSON.stringify(auditInput)}`,
+    images: [],
+    maxOutputTokens: 9000,
+    reasoning: 'medium',
+  });
+}
+
+async function startFrozenSetRepair(assets: Awaited<ReturnType<typeof frozenSetAssets>>, candidates: Q[], targets: BuildTarget[], issues: string[]) {
   const repairItems = candidates.map((q, index) => ({
     index,
     target: targets[index],
-    previousQuestion: auditQuestion(q),
+    previousQuestion: {
+      stem: q.stem,
+      choices: q.choices,
+      answer: q.answer,
+      explanation: q.explanation,
+      misconception: q.misconception,
+      evidence: q.evidence,
+    },
     issues: issues[index] || 'FROZEN QA에서 수정 필요',
   }));
   return openAiStartBackground({
     model: GPT_MODELS.generator,
-    schemaName: 'frozen_set_repairs',
-    schema: candidateQuestionSchema(targets, assets.focusedText, true),
+    schemaName: 'frozen_set_repairs_v4',
+    schema: frozenCompactQuestionSchema(targets.length),
     system: `${FROZEN_READING_QA_PROMPT}\n\n${FROZEN_QA_ADAPTER_RULES}`,
-    prompt: `${assets.context}
-
-아래는 v10.11 FROZEN 세트 일괄 QA에서 탈락한 문항들이다.
-각 항목의 target을 그대로 충족하도록 결함을 수정하고, 완성된 문항 전체를 questions 배열로 같은 순서에 출력하라.
-이미 합격한 문항은 건드리지 않는다. 새 문항 수를 늘리지 않는다.
-발문은 간결하게 유지하고 난도를 문장 복잡성으로 만들지 않는다.
-정답 번호와 부정형/긍정형은 가능하면 기존 세트 분포를 유지하되, 그 자체가 결함이면 의미 품질을 우선해 고친다.
-원문 밖 지식을 추가하지 않는다.
-
-수정 대상:
-${JSON.stringify(repairItems)}`,
+    prompt: `[승인 지문]\n${assets.focusedText}\n\n[수정 지시]\n아래 결함 문항만 v10.11 FROZEN 기준으로 수정한다. 각 target의 skill/level/objective를 유지하고, 지적된 결함을 제거한 최종 문항만 같은 순서로 출력한다. 수정 후 스스로 정답 유일성·원문 근거·발문 명료성을 다시 확인한다. 이미 합격한 문항은 건드리지 않는다.\n\n[수정 대상]\n${JSON.stringify(repairItems)}`,
     images: [],
-    maxOutputTokens: Math.min(
-      GENERATION_OUTPUT_TOKENS,
-      Math.max(12000, targets.length * 1800)
-    ),
-    reasoning: 'high',
+    maxOutputTokens: Math.min(20000, Math.max(7000, targets.length * 700)),
+    reasoning: 'medium',
   });
 }
 
@@ -4345,17 +4383,11 @@ async function frozenSetBuildStep(
   uid: string,
   passageId: string,
   initialPassage: Passage,
-  body: {
-    sourceChunk?: unknown;
-    phase?: unknown;
-    jobId?: unknown;
-  }
+  body: { sourceChunk?: unknown; phase?: unknown; jobId?: unknown }
 ) {
   let p = initialPassage;
-  const sourceChunk =
-    typeof body.sourceChunk === 'number' && Number.isInteger(body.sourceChunk)
-      ? body.sourceChunk
-      : 0;
+  const sourceChunk = typeof body.sourceChunk === 'number' && Number.isInteger(body.sourceChunk)
+    ? body.sourceChunk : 0;
 
   if (typeof body.jobId !== 'string' || !body.jobId) {
     const existing = await listQuestions(passageId);
@@ -4363,20 +4395,12 @@ async function frozenSetBuildStep(
       const result = await makeBuildResult(passageId, 0, 0, 0, 0);
       return json({ ...result, bankComplete: result.complete, pipelineComplete: true });
     }
-    const resumed = await findResumableBuildJob(
-      uid,
-      passageId,
-      currentBankRevision(p)
-    );
+    const resumed = await findResumableBuildJob(uid, passageId, currentBankRevision(p));
     if (resumed)
       return json({
-        phase: resumed.pendingGenerationResponseId
-          ? 'generating'
-          : resumed.candidates.length
-            ? resumed.pendingAuditResponseId
-              ? 'solving-a'
-              : 'generated'
-            : 'generation-ready',
+        phase: resumed.pendingGenerationResponseId ? 'generating' :
+          resumed.pendingAuditResponseId ? 'auditing' :
+          resumed.candidates.length ? 'generated' : 'generation-ready',
         jobId: resumed.id,
         resumed: true,
         generatedCount: resumed.generatedCount,
@@ -4409,7 +4433,7 @@ async function frozenSetBuildStep(
       phase: 'generation-ready',
       jobId,
       targetCount: targets.length,
-      apiPlan: 'generate-set -> qa-set -> repair-failures-only',
+      apiPlan: '1x-set-generation -> 1x-set-QA -> optional-1x-repair',
     });
   }
 
@@ -4425,75 +4449,25 @@ async function frozenSetBuildStep(
 
   if (job.repairRound === 1) {
     const targets = job.targets || [];
-    if (!targets.length || !job.candidates.length) {
-      const result = await makeBuildResult(
-        passageId,
-        job.savedQuestionIds?.length || 0,
-        job.generatedCount,
-        0,
-        job.auditVerdicts?.length || 0
-      );
-      job.result = result;
-      await saveBuildJob(uid, passageId, jobId, job);
-      return json({
-        ...result,
-        complete: true,
-        bankComplete: result.complete,
-        pipelineComplete: true,
-        manualReviewRequired: !result.complete,
-        rejectionSummary: '수정할 문항 데이터가 없어 추가 API 호출 없이 종료했습니다.',
-      });
-    }
+    if (!targets.length || !job.candidates.length)
+      throw statusError('FROZEN 수정 대상 상태가 올바르지 않습니다.', 409);
 
     if (job.pendingGenerationResponseId) {
       const pending = await pollBuildStage<{ questions: unknown[] }>(
-        uid,
-        passageId,
-        jobId,
-        job,
-        'generation',
-        GPT_MODELS.generator
+        uid, passageId, jobId, job, 'generation', GPT_MODELS.generator
       );
       if (pending.state === 'waiting')
-        return json({
-          phase: 'generating',
-          jobId,
-          repairPending: true,
-          targetCount: targets.length,
-        });
-
-      const raw = Array.isArray(pending.data.questions)
-        ? pending.data.questions
-        : [];
+        return json({ phase: 'generating', jobId, repairPending: true, targetCount: targets.length, apiStage: 'repairing' });
+      const raw = Array.isArray(pending.data.questions) ? pending.data.questions : [];
       const repaired = targets
-        .map((target, index) => candidateToQuestion(raw[index], target))
+        .map((target, index) => frozenRawToQuestion(raw[index], target))
         .filter((q): q is Q => !!q);
       delete job.pendingGenerationResponseId;
       job.generatedCount += raw.length;
-
-      const comparisonStems = usableQuestions(existing).map(item => item.stem);
-      const valid = repaired.filter(q => {
-        const others = repaired
-          .filter(other => other !== q)
-          .map(other => other.stem);
-        return (
-          questionDesignIssues(q, assets.focusedText).length === 0 &&
-          staticQuestionIssues(
-            q,
-            assets.content.text,
-            [...comparisonStems, ...others],
-            assets.imageMode,
-            assets.sourcePages
-          ).length === 0
-        );
-      });
-      const accepted = valid.map(frozenAcceptedFromRepair);
+      const valid = repaired.filter(q => frozenSetLocalIssues(q, assets.content.text).length === 0);
+      const accepted = valid.map(q => frozenAccepted(q));
       await saveFrozenSetQuestions(
-        passageId,
-        uid,
-        job.bankRevision || currentBankRevision(p),
-        accepted,
-        job
+        passageId, uid, job.bankRevision || currentBankRevision(p), accepted, job
       );
       job.candidates = [];
       job.targets = [];
@@ -4503,8 +4477,8 @@ async function frozenSetBuildStep(
         passageId,
         job.savedQuestionIds?.length || 0,
         job.generatedCount,
-        0,
-        job.auditVerdicts?.length || 0
+        job.auditIndex || 0,
+        job.auditIndex || 0
       );
       job.result = result;
       await saveBuildJob(uid, passageId, jobId, job);
@@ -4515,161 +4489,69 @@ async function frozenSetBuildStep(
         pipelineComplete: true,
         manualReviewRequired: !result.complete,
         apiCallsMaximum: 3,
-        rejectionSummary: result.complete
-          ? ''
-          : `FROZEN 1회 생성·1회 QA·1회 수정까지 마쳤지만 공개 조건이 남았습니다: ${bankQualityIssues(await listQuestions(passageId)).join(' · ')}`,
+        rejectionSummary: result.complete ? '' :
+          `FROZEN 생성·QA·수정 3회 상한까지 완료했지만 공개 조건이 남았습니다: ${bankQualityIssues(await listQuestions(passageId)).join(' · ')}`,
       });
     }
 
-    job.pendingGenerationResponseId = await startFrozenSetRepairBackground(
-      assets,
-      job.candidates,
-      targets,
-      job.generationRejections || []
+    job.pendingGenerationResponseId = await startFrozenSetRepair(
+      assets, job.candidates, targets, job.generationRejections || []
     );
     await saveBuildJob(uid, passageId, jobId, job);
-    return json({
-      phase: 'generating',
-      jobId,
-      repairPending: true,
-      targetCount: targets.length,
-      apiStage: 'repair-failures-only',
-    });
+    return json({ phase: 'generating', jobId, repairPending: true, targetCount: targets.length, apiStage: 'repair-failures-only' });
   }
 
   if (!job.candidates.length) {
     const targets = job.targets || frozenSetTargets();
     if (job.pendingGenerationResponseId) {
       const pending = await pollBuildStage<{ questions: unknown[] }>(
-        uid,
-        passageId,
-        jobId,
-        job,
-        'generation',
-        GPT_MODELS.generator
+        uid, passageId, jobId, job, 'generation', GPT_MODELS.generator
       );
       if (pending.state === 'waiting')
-        return json({
-          phase: 'generating',
-          jobId,
-          targetCount: targets.length,
-          generatedCount: job.generatedCount,
-        });
-      const raw = Array.isArray(pending.data.questions)
-        ? pending.data.questions
-        : [];
+        return json({ phase: 'generating', jobId, targetCount: targets.length, generatedCount: job.generatedCount });
+      const raw = Array.isArray(pending.data.questions) ? pending.data.questions : [];
       const candidates = targets
-        .map((target, index) => candidateToQuestion(raw[index], target))
+        .map((target, index) => frozenRawToQuestion(raw[index], target))
         .filter((q): q is Q => !!q);
       delete job.pendingGenerationResponseId;
       job.generatedCount += raw.length;
       job.generationIndex = targets.length;
       job.candidates = candidates;
       await saveBuildJob(uid, passageId, jobId, job);
-      if (candidates.length !== targets.length) {
-        const result = await makeBuildResult(
-          passageId,
-          0,
-          job.generatedCount,
-          0,
-          0
-        );
-        job.result = result;
-        await saveBuildJob(uid, passageId, jobId, job);
-        return json({
-          ...result,
-          complete: true,
-          bankComplete: false,
-          pipelineComplete: true,
-          manualReviewRequired: true,
-          rejectionSummary: `세트 생성 응답 ${targets.length}개 중 ${candidates.length}개만 구조화되어 추가 API 호출 없이 종료했습니다.`,
-        });
-      }
-      return json({
-        phase: 'generated',
-        jobId,
-        generatedCount: job.generatedCount,
-        targetCount: candidates.length,
-        apiStage: 'set-generated',
-      });
+      if (candidates.length !== targets.length)
+        throw statusError(`FROZEN 세트 생성 응답 ${targets.length}개 중 ${candidates.length}개만 구조화되었습니다. 추가 API 호출을 중단합니다.`, 502);
+      return json({ phase: 'generated', jobId, generatedCount: job.generatedCount, targetCount: candidates.length, apiStage: 'set-generated' });
     }
-
-    job.pendingGenerationResponseId = await startQuestionGenerationBackground(
-      assets.context,
-      frozenSetGenerationInstructions(targets),
-      targets,
-      [],
-      job.generationRetryCount || 0,
-      assets.focusedText,
-      true
-    );
+    job.pendingGenerationResponseId = await startFrozenSetGeneration(assets, targets);
     await saveBuildJob(uid, passageId, jobId, job);
-    return json({
-      phase: 'generating',
-      jobId,
-      targetCount: targets.length,
-      apiStage: 'generate-set',
-    });
+    return json({ phase: 'generating', jobId, targetCount: targets.length, apiStage: 'generate-set' });
   }
 
   if (!job.auditVerdicts) {
     if (job.pendingAuditResponseId) {
-      const pending = await pollBuildStage<{ verdicts: AuditVerdict[] }>(
-        uid,
-        passageId,
-        jobId,
-        job,
-        'audit',
-        GPT_MODELS.audit
+      const pending = await pollBuildStage<{ verdicts: FrozenSetQaRaw[] }>(
+        uid, passageId, jobId, job, 'audit', GPT_MODELS.audit
       );
       if (pending.state === 'waiting')
-        return json({
-          phase: 'auditing',
-          jobId,
-          targetCount: job.candidates.length,
-          apiStage: 'qa-set',
-        });
-      job.auditVerdicts = Array.isArray(pending.data.verdicts)
-        ? pending.data.verdicts
-        : [];
+        return json({ phase: 'auditing', jobId, targetCount: job.candidates.length, apiStage: 'qa-set' });
+      const rawVerdicts = Array.isArray(pending.data.verdicts) ? pending.data.verdicts : [];
+      job.auditVerdicts = rawVerdicts
+        .map(raw => {
+          const q = job.candidates[raw.index];
+          return q ? frozenQaToAudit(raw, q) : null;
+        })
+        .filter((item): item is AuditVerdict => !!item);
+      job.auditIndex = job.auditVerdicts.length;
       delete job.pendingAuditResponseId;
       await saveBuildJob(uid, passageId, jobId, job);
     } else {
-      const auditInput = job.candidates.map((q, index) => ({
-        index,
-        question: auditQuestion(q),
-      }));
-      job.pendingAuditResponseId = await openAiStartBackground({
-        model: GPT_MODELS.audit,
-        schemaName: 'frozen_set_qa',
-        schema: auditSchema(job.candidates.length, assets.focusedText),
-        system: AUDIT_SYSTEM,
-        prompt: `${assets.context}
-
-${auditInstructions(p.category)}
-
-v10.11 FROZEN 세트 전체를 한 번에 검수한다. 문항을 서로 비교해 발문 중복, 판단 중복, 정답 위치 편향, 부정형 편중, 정답 길이 단서를 함께 점검한다.
-개별 문항의 observedSkill/observedLevel은 실제 최단 풀이를 기준으로 판정한다.
-채택을 막는 결함만 issues에 기록하고, 문제가 없으면 issues는 빈 배열로 둔다.
-
-검수 대상:
-${JSON.stringify(auditInput)}`,
-        images: [],
-        maxOutputTokens: AUDIT_OUTPUT_TOKENS,
-        reasoning: 'high',
-      });
+      job.pendingAuditResponseId = await startFrozenSetQa(assets, job.candidates);
       await saveBuildJob(uid, passageId, jobId, job);
-      return json({
-        phase: 'auditing',
-        jobId,
-        targetCount: job.candidates.length,
-        apiStage: 'qa-set',
-      });
+      return json({ phase: 'auditing', jobId, targetCount: job.candidates.length, apiStage: 'qa-set' });
     }
   }
 
   const verdicts = job.auditVerdicts || [];
-  const currentUsableStems = usableQuestions(existing).map(item => item.stem);
   const passed: Q[] = [];
   const failedQuestions: Q[] = [];
   const failedTargets: BuildTarget[] = [];
@@ -4677,36 +4559,17 @@ ${JSON.stringify(auditInput)}`,
 
   job.candidates.forEach((q, index) => {
     const verdict = verdicts.find(item => item.index === index);
-    const otherStems = job.candidates
-      .filter((_, otherIndex) => otherIndex !== index)
-      .map(other => other.stem);
-    const issues = frozenQaIssues(
-      q,
-      verdict,
-      assets.content.text,
-      assets.focusedText,
-      [...currentUsableStems, ...otherStems],
-      assets.imageMode,
-      assets.sourcePages
-    );
-    if (!issues.length && verdict) passed.push(frozenAcceptedFromAudit(q, verdict));
+    const issues = frozenQaIssues(q, verdict, assets.content.text);
+    if (!issues.length && verdict) passed.push(frozenAccepted(q, verdict));
     else {
       failedQuestions.push(q);
-      failedTargets.push({
-        skill: q.skill,
-        level: q.level,
-        objective: q.objective,
-      });
+      failedTargets.push({ skill: q.skill, level: q.level, objective: q.objective });
       failedIssues.push(issues.join(' / '));
     }
   });
 
   await saveFrozenSetQuestions(
-    passageId,
-    uid,
-    job.bankRevision || currentBankRevision(p),
-    passed,
-    job
+    passageId, uid, job.bankRevision || currentBankRevision(p), passed, job
   );
 
   if (failedQuestions.length) {
@@ -4745,9 +4608,8 @@ ${JSON.stringify(auditInput)}`,
     pipelineComplete: true,
     manualReviewRequired: !result.complete,
     apiCallsMaximum: 2,
-    rejectionSummary: result.complete
-      ? ''
-      : `FROZEN 세트 생성·일괄 QA를 마쳤지만 공개 조건이 남았습니다: ${bankQualityIssues(await listQuestions(passageId)).join(' · ')}`,
+    rejectionSummary: result.complete ? '' :
+      `FROZEN 세트 생성·일괄 QA까지 완료했지만 공개 조건이 남았습니다: ${bankQualityIssues(await listQuestions(passageId)).join(' · ')}`,
   });
 }
 
@@ -7181,7 +7043,7 @@ export const handler = router({
 
           if (
             b.trial !== true &&
-            QUESTION_ENGINE_VERSION === 'v10.11-frozen-set-v3'
+            QUESTION_ENGINE_VERSION === 'v10.11-frozen-set-v4'
           )
             return await frozenSetBuildStep(uid, passageId, p, b);
 
