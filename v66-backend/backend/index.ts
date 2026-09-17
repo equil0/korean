@@ -4624,7 +4624,7 @@ async function frozenSetBuildStep(
       );
       if (pending.state === 'waiting')
         return json({
-          phase: 'solving-a',
+          phase: 'auditing',
           jobId,
           targetCount: job.candidates.length,
           apiStage: 'qa-set',
@@ -4660,7 +4660,7 @@ ${JSON.stringify(auditInput)}`,
       });
       await saveBuildJob(uid, passageId, jobId, job);
       return json({
-        phase: 'solving-a',
+        phase: 'auditing',
         jobId,
         targetCount: job.candidates.length,
         apiStage: 'qa-set',
