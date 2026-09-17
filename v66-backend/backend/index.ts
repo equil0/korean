@@ -5518,9 +5518,13 @@ type AdaptiveTarget = BuildTarget & {
 };
 type AdaptivePrefetchMarker = {
   sourceQuestionId: string;
-  jobId: string;
   bankRevision: number;
+  status: 'generating' | 'completed' | 'failed';
+  successQuestionId?: string;
+  recoveryQuestionId?: string;
+  lastError?: string;
   createdAt: string;
+  updatedAt: string;
 };
 
 function adaptiveQuestionTable(uid: string, passageId: string, revision: number) {
@@ -5609,6 +5613,7 @@ async function ensureAdaptivePrefetch(
   q: Q & { id: string },
   p: Progress
 ) {
+  const table = adaptivePrefetchTable(uid, passageId, revision);
   try {
     const existing = await latestAdaptivePrefetchMarker(
       uid,
@@ -5616,37 +5621,58 @@ async function ensureAdaptivePrefetch(
       revision,
       q.id
     );
-    if (existing) {
-      try {
-        const job = await learningPlatform.getAiJob(uid, existing.jobId);
-        if (job.status === 'queued' || job.status === 'running' || job.status === 'completed')
-          return existing.jobId;
-      } catch {
-        // A missing/failed job is safely replaced below.
-      }
-    }
-    const targets = adaptiveTargetsForCurrent(q, p);
-    const job = await learningPlatform.enqueueAiJob({
-      kind: 'adaptive-prefetch',
-      payload: {
+    if (existing?.status === 'completed') return existing.id;
+    if (
+      existing?.status === 'generating' &&
+      Date.now() - Date.parse(existing.updatedAt || existing.createdAt) < 3 * 60 * 1000
+    ) return existing.id;
+
+    const now = new Date().toISOString();
+    const marker: AdaptivePrefetchMarker = {
+      sourceQuestionId: q.id,
+      bankRevision: revision,
+      status: 'generating',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const [markerId] = await db.add(table, [marker]);
+    if (!markerId) return '';
+
+    try {
+      const targets = adaptiveTargetsForCurrent(q, p);
+      const result = await generateAdaptivePrefetch(
+        uid,
         passageId,
-        bankRevision: revision,
-        sourceQuestionId: q.id,
-        targets,
-        recentAnswered: p.recentAnswered.slice(-12),
-      },
-      createdBy: uid,
-      maxAttempts: 2,
-    });
-    await db.add(adaptivePrefetchTable(uid, passageId, revision), [
-      {
-        sourceQuestionId: q.id,
-        jobId: job.id,
-        bankRevision: revision,
-        createdAt: new Date().toISOString(),
-      } satisfies AdaptivePrefetchMarker,
-    ]);
-    return job.id;
+        revision,
+        q.id,
+        targets
+      );
+      const completed: AdaptivePrefetchMarker = {
+        ...marker,
+        status: 'completed',
+        successQuestionId: result.successQuestionId,
+        recoveryQuestionId: result.recoveryQuestionId,
+        updatedAt: new Date().toISOString(),
+      };
+      const [saved] = await db.update(table, [{ id: markerId, record: completed }]);
+      if (!saved) throw new Error('적응형 prefetch 완료 상태 저장 실패');
+      return markerId;
+    } catch (e) {
+      const failed: AdaptivePrefetchMarker = {
+        ...marker,
+        status: 'failed',
+        lastError: (e instanceof Error ? e.message : String(e)).slice(0, 1000),
+        updatedAt: new Date().toISOString(),
+      };
+      try { await db.update(table, [{ id: markerId, record: failed }]); } catch {}
+      console.warn('[adaptive-prefetch-generate]', {
+        uid,
+        passageId,
+        questionId: q.id,
+        message: failed.lastError,
+      });
+      return '';
+    }
   } catch (e) {
     console.warn('[adaptive-prefetch-enqueue]', {
       uid,
@@ -5670,18 +5696,10 @@ async function readyAdaptiveQuestion(
     revision,
     sourceQuestionId
   );
-  if (!marker) return undefined;
-  let job: Awaited<ReturnType<typeof learningPlatform.getAiJob>>;
-  try {
-    job = await learningPlatform.getAiJob(uid, marker.jobId);
-  } catch {
-    return undefined;
-  }
-  if (job.status !== 'completed' || !job.result || typeof job.result !== 'object')
-    return undefined;
-  const result = job.result as Record<string, unknown>;
-  const key = branch === 'success' ? 'successQuestionId' : 'recoveryQuestionId';
-  const id = typeof result[key] === 'string' ? result[key] as string : '';
+  if (!marker || marker.status !== 'completed') return undefined;
+  const id = branch === 'success'
+    ? marker.successQuestionId || ''
+    : marker.recoveryQuestionId || '';
   if (!id) return undefined;
   const [q] = await db.get<Q>(adaptiveQuestionTable(uid, passageId, revision), [id]);
   if (!q || q.adaptiveOwnerUid !== uid || q.qualityVersion !== QUALITY_VERSION)
