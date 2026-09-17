@@ -4026,6 +4026,23 @@ function frozenSetTargets(): BuildTarget[] {
   );
 }
 
+function frozenMissingTargets(qs: Array<Q & { id: string }>): BuildTarget[] {
+  const counts = new Map<string, number>();
+  for (const q of usableQuestions(qs)) {
+    const key = `${q.skill}:${q.level}:${q.objective}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return frozenSetTargets().filter(target => {
+    const key = `${target.skill}:${target.level}:${target.objective || 'integration'}`;
+    const count = counts.get(key) || 0;
+    if (count > 0) {
+      counts.set(key, count - 1);
+      return false;
+    }
+    return true;
+  });
+}
+
 function frozenSetTargetPlan(targets: BuildTarget[]) {
   return targets
     .map((target, index) => {
@@ -4043,10 +4060,10 @@ function frozenSetGenerationInstructions(targets: BuildTarget[]) {
 ${frozenSetTargetPlan(targets)}
 
 [세트 전역 규칙]
-- 전체 ${targets.length}문항은 5문항짜리 내부 세트 5개로 본다. 각 내부 세트에는 content, logic, inference, comparison, application이 각각 1문항씩 있다.
-- 각 내부 세트마다 부정형 발문은 정확히 1문항만 사용한다. 단순히 긍정형 문장의 어미만 뒤집지 말고 실제 판단 과업이 부정형이어야 한다.
-- 정답 번호는 전체 25문항에서 1~5가 각각 대체로 5회가 되게 하고, 가능하면 각 내부 세트에서도 1~5를 한 번씩 사용한다. 정답 위치를 맞추려고 의미를 훼손하지 않는다.
-- 정답 선지가 유일한 최장 선지가 되는 문항은 전체 5개 이하로 제한한다. 길이 맞추기용 패딩은 금지한다.
+- 전체 ${targets.length}문항은 같은 level/objective를 공유하는 5문항 묶음 ${Math.ceil(targets.length / 5)}개로 설계한다. 완전한 5문항 묶음에는 content, logic, inference, comparison, application이 각각 1문항씩 있다.
+- 각 완전한 5문항 묶음마다 부정형 발문은 정확히 1문항만 사용한다. 단순히 긍정형 문장의 어미만 뒤집지 말고 실제 판단 과업이 부정형이어야 한다.
+- 각 완전한 5문항 묶음에서 정답 번호 1~5를 가능하면 한 번씩 사용한다. 정답 위치를 맞추려고 의미를 훼손하지 않는다.
+- 정답 선지가 유일한 최장 선지가 되는 문항은 이번 생성분 전체에서 최대 ${Math.max(1, Math.floor(targets.length * 0.2))}개로 제한한다. 길이 맞추기용 패딩은 금지한다.
 - 발문은 한 번 읽고 질문 대상을 즉시 알 수 있는 간결한 한 문장을 원칙으로 한다. 난도는 긴 발문이나 중첩 관형절이 아니라 근거 결합과 선지 판별에서 만든다.
 - L1은 핵심 정보·조건 확인, L2는 서로 다른 원문 근거 2개를 연결해야 풀리게 한다.
 - L3는 반드시 서로 다른 원문 근거 3개 이상을 결합하고, 생략할 수 없는 판단을 3단계 이상 거쳐야 정답을 고를 수 있게 한다. 한 문장·한 문단·한 요약문만 찾아도 풀리면 L3가 아니다.
@@ -4471,7 +4488,7 @@ async function frozenSetBuildStep(
         jobId: resumed.id,
         resumed: true,
         generatedCount: resumed.generatedCount,
-        targetCount: resumed.targets?.length || FROZEN_SET_QUESTION_COUNT,
+        targetCount: resumed.targets?.length || frozenMissingTargets(existing).length || FROZEN_SET_QUESTION_COUNT,
         apiPlan: 'one-call-frozen-set',
       });
     if (resumed) await clearBuildJobs(uid, passageId);
@@ -4479,7 +4496,11 @@ async function frozenSetBuildStep(
     if (p.status === 'published') p = await invalidatePassageBank(passageId, p);
     await frozenSetAssets(p, existing, sourceChunk);
     await clearBuildJobs(uid, passageId);
-    const targets = frozenSetTargets();
+    const targets = frozenMissingTargets(existing);
+    if (!targets.length) {
+      const result = await makeBuildResult(passageId, 0, 0, 0, 0);
+      return json({ ...result, complete: true, bankComplete: result.complete, pipelineComplete: true, apiCallsMaximum: 0 });
+    }
     const job: BuildJob = {
       passageId,
       bankRevision: currentBankRevision(p),
