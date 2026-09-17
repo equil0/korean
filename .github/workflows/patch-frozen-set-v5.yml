@@ -18,7 +18,7 @@ jobs:
           ref: main
           fetch-depth: 0
       - name: Apply one-call FROZEN set pipeline v5
-        run: python3 .github/patch_frozen_set_v5.py
+        run: python3 .github/run_patch_frozen_set_v5_retry.py
       - name: TypeScript syntax check
         run: |
           npx --yes esbuild v66-backend/backend/index.ts --platform=neutral --format=esm --log-level=warning --outfile=/tmp/index.js
