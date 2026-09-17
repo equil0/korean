@@ -1,0 +1,31 @@
+name: Patch v10.11 FROZEN genuine L3 difficulty v6
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-frozen-set-v6-difficulty.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply FROZEN v6 difficulty gates
+        run: python3 .github/patch_frozen_set_v6_difficulty.py
+      - name: TypeScript syntax check
+        run: |
+          npx --yes esbuild v66-backend/backend/index.ts --platform=neutral --format=esm --log-level=warning --outfile=/tmp/index.js
+      - name: Commit engine patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add v66-backend/backend/index.ts
+          git commit -m 'Enforce genuine L3 reasoning in FROZEN one-call generation'
+          git push origin HEAD:main
