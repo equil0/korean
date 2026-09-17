@@ -3938,7 +3938,7 @@ function frozenBankGenerationPlan(
   const usable = usableQuestions(qs);
   const total = usable.length;
   const projected = total + Math.max(1, batchSize);
-  const negativeCount = usable.filter(q => negativeStem(q.stem)).length;
+  const negativeCount = usable.filter(q => /(?:적절하지|옳지|타당하지|일치하지|아닌 것은|않은 것은|없는 것은|부적절)/.test(q.stem)).length;
   const desiredNegative = Math.ceil(projected * 0.26);
   let negativeNeeded = Math.max(0, Math.min(batchSize, desiredNegative - negativeCount));
   const currentNegativeRatio = total ? negativeCount / total : 0;
