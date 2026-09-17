@@ -1,0 +1,31 @@
+name: Hotfix FROZEN negative-stem classifier
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hotfix-frozen-negative-regex.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch classifier
+        run: python3 .github/patch_frozen_negative_regex.py
+      - name: TypeScript syntax check
+        run: |
+          npx --yes esbuild v66-backend/backend/index.ts --platform=neutral --format=esm --log-level=warning --outfile=/tmp/index.js
+      - name: Commit hotfix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add v66-backend/backend/index.ts
+          git commit -m 'Recognize semantic negative stems in FROZEN bank checks'
+          git push origin HEAD:main
