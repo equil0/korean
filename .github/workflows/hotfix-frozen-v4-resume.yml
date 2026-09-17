@@ -1,0 +1,30 @@
+name: Hotfix FROZEN v4 stale resume guard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hotfix-frozen-v4-resume.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply stale resume guard
+        run: python3 .github/hotfix-frozen-v4-resume.py
+      - name: TypeScript syntax check
+        run: npx --yes esbuild v66-backend/backend/index.ts --format=esm --platform=neutral --log-level=error --outfile=/tmp/frozen-v4-resume-check.js
+      - name: Commit hotfix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add v66-backend/backend/index.ts
+          git commit -m 'Guard v4 against stale build job resume'
+          git push origin HEAD:main
